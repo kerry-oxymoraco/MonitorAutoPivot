@@ -1,8 +1,4 @@
 #include <Wire.h>
-#include <Adafruit_MMA8451.h>
-#include <Adafruit_Sensor.h>
-
-Adafruit_MMA8451 mma = Adafruit_MMA8451();
 
 // Flags for state machine
 bool remapping = false;
@@ -28,12 +24,12 @@ int currentOrientation = -1;
 int previousOrientation = -1;
 
 // 0.42, to not update orientation when monitor's pitch is over that value
-// approximately can go up to 65° from perpendicularly positioned to user monitor
+// approximately can go up to 65° from perpendicularly postitoned to user monitor
 float orientationThreshold = 0.42;
-// Deadzone to not update orientation when device in state between two orientations
+// Deadzone to not update orientation when device in state betwen two orientations
 float deadZoneRatio = 0.1;
 
-// for determining in remapping function
+// for determening in remaping function
 struct RemappingPoint {
   float x, y, z;
 };
@@ -48,7 +44,7 @@ enum RemappingState {
 };
 RemappingState remapState = REMAP_NONE;
 
-// Remapping accelerometer axis
+// Remaping accelerometer axis
 void remapAccAxis() {
   float val90, val0;
   int dominantAxis90 = getDominantAxis(remapping90, val90);
@@ -56,12 +52,12 @@ void remapAccAxis() {
   // Axes should not be same
   if (dominantAxis90 == dominantAxis0) {
     Serial.println("[REMAPPING_ERR] Error: Same axis for both orientation!");
-    remapState = REMAP_NONE;
+    remapState = REMAP_NONE;  // leave from remapping state
     remapping = false;
     return;
   }
 
-  // Remapping axis
+  // Remaping axis
   axisMapY = dominantAxis90;
   axisSignY = (val90 > 0) ? 1 : -1;
   axisMapZ = dominantAxis0;
@@ -76,10 +72,10 @@ void remapAccAxis() {
       break;
     }
   }
-  remapState = REMAP_DONE;
+  remapState = REMAP_DONE;  // remapping succeeded
 }
 
-// get dominant axis to help determining axis remapping
+// get dominant axis to help determing axis remaping
 int getDominantAxis(const RemappingPoint& point, float& valueOut) {
   float vals[3] = { point.x, point.y, point.z };
   int maxIndex = 0;
@@ -101,6 +97,9 @@ void filterAccelerometer() {
   filteredAccX = (1 - accAlpha) * filteredAccX + accAlpha * relAccX;
   filteredAccY = (1 - accAlpha) * filteredAccY + accAlpha * relAccY;
   filteredAccZ = (1 - accAlpha) * filteredAccZ + accAlpha * relAccZ;
+  // filteredAccX =  relAccX;
+  // filteredAccY = relAccY;
+  // filteredAccZ = relAccZ;
 }
 
 // For calculating orientation
@@ -108,6 +107,7 @@ struct Orientation {
   float x, y, z;
   int angle;
 };
+// In an ideal situation the axis is equal to 1 or -1, so with that can be determined orientation
 Orientation orientations[] = {
   { 0, 0, 1, 0 },
   { 0, 0, -1, 180 },
@@ -115,79 +115,82 @@ Orientation orientations[] = {
   { 0, -1, 0, 270 },
 };
 
-// -------------------------------------------------------
-// CHANGED: replaces the MPU-6050 raw I2C read with
-//          Adafruit MMA8451 library call.
-//          The MMA8451 returns acceleration in m/s².
-//          We divide by 9.80665 to convert back to g,
-//          matching the ±1g range the orientation math expects.
-// -------------------------------------------------------
 void acc_signals(void) {
-  sensors_event_t event;
-  mma.getEvent(&event);
-
-  AccX = event.acceleration.x / 9.80665;
-  AccY = event.acceleration.y / 9.80665;
-  AccZ = event.acceleration.z / 9.80665;
-
+  Wire.beginTransmission(0x68);
+  Wire.write(0x3B);  //Starting register for Accel Readings
+  Wire.endTransmission();
+  Wire.requestFrom(0x68, 6);                         //Request Accel Registers (3B - 40)
+  int16_t AccXLSB = Wire.read() << 8 | Wire.read();  //Store first two bytes into accelX
+  int16_t AccYLSB = Wire.read() << 8 | Wire.read();  //Store middle two bytes into accelY
+  int16_t AccZLSB = Wire.read() << 8 | Wire.read();  //Store last two bytes into accelZ
+  // Convert LSB in g and apply correction values
+  AccX = (float)AccXLSB / 16384 - 0.06;
+  AccY = (float)AccYLSB / 16384 - 0.02;
+  AccZ = (float)AccZLSB / 16384 - 0.02;
+  // float tempAcc[3] = { AccZ, AccY, AccX };
+  // Saving relative axis according to remap
   float tempAcc[3] = { AccX, AccY, AccZ };
   relAccX = tempAcc[axisMapX] * axisSignX;
   relAccY = tempAcc[axisMapY] * axisSignY;
   relAccZ = tempAcc[axisMapZ] * axisSignZ;
 }
 
-// -------------------------------------------------------
-// CHANGED: replaces MPU-6050 I2C register init with
-//          Adafruit MMA8451 library begin().
-//          Range set to 2g to match the sensitivity the
-//          original sketch assumed (values near ±1g).
-// -------------------------------------------------------
 void setup() {
   Serial.begin(115200);
-
-Serial.println("Attempting MMA8451 init...");
-if (!mma.begin(0x1C)) {
-    Serial.println("[ERROR] MMA8451 not found. Check wiring.");
-    while (1);
-}
-Serial.println("MMA8451 init succeeded.");
-
-  mma.setRange(MMA8451_RANGE_2_G);  // 2g range: best sensitivity for orientation detection
-
+  // Initialize I2C
+  Wire.setClock(400000);
+  Wire.begin();
+  delay(250);
+  Wire.beginTransmission(0x68);  // I2C address of the MPU
+  Wire.write(0x6B);              //Accessing the register 6B - Power Management
+  Wire.write(0x00);              //Setting SLEEP register to 0
+  Wire.endTransmission();
+  // Set sensitivity of accelerometer
+  Wire.beginTransmission(0x68);
+  Wire.write(0x1C);             // Accessing the register 1C - ACCEL_CONFIG
+  Wire.write(0x00);             // set sensitivity of ±8g (resolution: 4096 LSB/g)
+  Wire.endTransmission();
   pinMode(13, OUTPUT);
   digitalWrite(13, HIGH);
-
+  // Sending to pc that Arduino is ready
   Serial.println("[READY]");
 }
 
 void loop() {
   if (Serial.available()) {
+    // Reading command from pc
     String command = Serial.readStringUntil('\n');
     command.trim();
     if (command == "REMAP_AXIS") {
-      remapping = true;
+      remapping = true;  // Set flag to remapping state
       remapState = REMAP_WAIT_90;
     } else if (command == "OK" && remapping) {
+      // Firstly record 90 (portrait) orientation
       if (remapState == REMAP_WAIT_90) {
         remapping90 = { filteredAccX, filteredAccY, filteredAccZ };
         Serial.println("Portrait orientation recorded");
-        remapState = REMAP_WAIT_0;
+        remapState = REMAP_WAIT_0;  // change state of remapping to next ste
       } else if (remapState == REMAP_WAIT_0) {
+        // Secondly record 0 (landscape) orientation
         remapping0 = { filteredAccX, filteredAccY, filteredAccZ };
         Serial.println("Landscape orientation recorded");
         remapAccAxis();
       }
     } else if (command == "STOP" && remapping) {
+      // if User cancelled remapping
       Serial.println("[REMAPPING_ERR] Cancelled");
       remapState = REMAP_NONE;
       remapping = false;
 
     } else if (command.startsWith("AUTO_REMAP")) {
-      command.remove(0, 11);
+      // Loading remap of axis from config
+      command.remove(0, 11);  // remove "AUTO_REMAP/"
+      // For 6 variables
       int parts[6] = { 0 };
       int index = 0;
       int lastSlash = -1;
 
+      // split by "/"
       for (int i = 0; i < command.length(); i++) {
         if (command[i] == '/') {
           String part = command.substring(lastSlash + 1, i);
@@ -196,9 +199,11 @@ void loop() {
           if (index >= 6) break;
         }
       }
+      // Add last index after '/'
       if (index < 6) {
         parts[index] = command.substring(lastSlash + 1).toInt();
       }
+      // Assign remap
       axisMapX = parts[0];
       axisMapY = parts[1];
       axisMapZ = parts[2];
@@ -207,8 +212,9 @@ void loop() {
       axisSignZ = parts[5];
       Serial.println("[REMAP_LOADED]");
     } else if (command == "SEND_DATA") {
-      sendingData = true;
+      sendingData = true;  // Start sending orientation to pc
     } else if (command == "STOP" && sendingData) {
+      // Stop sending to pc and clear flags about orientation
       sendingData = false;
       currentOrientation = -1;
       previousOrientation = -1;
@@ -216,6 +222,7 @@ void loop() {
     }
   }
 
+  // --- state machine regular functions ---
   if (remapping) {
     switch (remapState) {
       case REMAP_WAIT_90:
@@ -244,6 +251,7 @@ void loop() {
         break;
       case REMAP_DONE:
         Serial.print("[REMAPPING_DONE] Remapping Done");
+        // Send values to pc to save in config
         Serial.print(" /");
         Serial.print(axisMapX);
         Serial.print("/");
@@ -256,7 +264,7 @@ void loop() {
         Serial.print(axisSignY);
         Serial.print("/");
         Serial.println(axisSignZ);
-        remapping = false;
+        remapping = false;  // leave from remapping state
         remapState = REMAP_NONE;
         break;
       default:
@@ -264,35 +272,59 @@ void loop() {
     }
 
   } else if (sendingData) {
+    // Detecting current orientation and sending new orientation to pc
     acc_signals();
     filterAccelerometer();
+    // variable for comparison with a reference value for the corresponding orientation
     float bestDot = -1;
+    // second one for comparising both of them
     float secondBestDot = -1;
+    // best matching orientation variable
     int bestAngle;
 
+    // Check which dot have best match for every orientation
     for (int i = 0; i < 4; i++) {
+      // Calculating the value dot
       float dot = filteredAccX * orientations[i].x + filteredAccY * orientations[i].y + filteredAccZ * orientations[i].z;
 
       if (dot > bestDot) {
+        // if new dot is new best
         secondBestDot = bestDot;
         bestDot = dot;
+        // save best matching orientation
         bestAngle = orientations[i].angle;
       } else if (dot > secondBestDot) {
+        // if new dot better than second secondBestDot
         secondBestDot = dot;
       }
     }
+    // Update current orientation only if monitor's pitch less than specified value
     if (bestDot > orientationThreshold) {
+      // Deadzone if the difference between the two best dots is less than 10% from best dot
       if ((bestDot - secondBestDot) < (deadZoneRatio * bestDot)) {
         currentOrientation = previousOrientation;
       } else {
+        // otherwise update new orientation
         currentOrientation = bestAngle;
       }
     }
+    // Check if orientation has changed and send it to pc
     if (currentOrientation != previousOrientation) {
       previousOrientation = currentOrientation;
       Serial.print("[DATA] ");
       Serial.println(currentOrientation);
     }
+    // Serial.print("Orientation: ");
+    // Serial.print(currentOrientation);
+    // Serial.print("AccX:");
+    // Serial.print(filteredAccX);
+    // Serial.print(',');
+    // Serial.print("AccY:");
+    // Serial.print(filteredAccY);
+    // Serial.print(',');
+    // Serial.print("AccZ:");
+    // Serial.print(filteredAccZ);
+    // Serial.println();
   }
   delay(50);
 }
