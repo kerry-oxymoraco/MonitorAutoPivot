@@ -108,12 +108,16 @@ struct Orientation {
   float x, y, z;
   int angle;
 };
+
+
 Orientation orientations[] = {
   { 0, 0, 1, 0 },
   { 0, 0, -1, 180 },
   { 0, 1, 0, 90 },
   { 0, -1, 0, 270 },
 };
+
+
 
 // -------------------------------------------------------
 // CHANGED: replaces the MPU-6050 raw I2C read with
